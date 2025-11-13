@@ -9,7 +9,7 @@ Follow these steps to set up and run the application:
 ### 1. Clone the Repository (if not already cloned)
 
 ```bash
-git clone <repository_url> # Replace with your repository URL
+git clone https://github.com/ArthamXTradebook/AI.git
 cd stock_agent_own
 ```
 
