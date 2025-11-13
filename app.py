@@ -8,6 +8,7 @@ from langgraph.prebuilt import ToolNode
 from langchain_core.messages import AIMessage
 from langgraph.graph import END, START, MessagesState, StateGraph
 from dotenv import load_dotenv
+from datetime import datetime
 
 # Load environment variables
 load_dotenv()
@@ -18,6 +19,9 @@ os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
 # Initialize LLM
 model = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
 llm = model
+
+# Get current date for context
+current_date = datetime.now().strftime("%Y-%m-%d")
 
 # Initialize SQLDatabase
 db = SQLDatabase.from_uri("sqlite:///stock.db")
@@ -62,6 +66,8 @@ then look at the results of the query and return the answer. Unless the user
 specifies a specific number of examples they wish to obtain, always limit your
 query to at most {top_k} results.
 
+The current date is {current_date}. Use this information when queries refer to "today", "latest", or relative timeframes.
+
 You can order the results by a relevant column to return the most interesting
 examples in the database. Never query for all the columns from a specific table,
 only ask for the relevant columns given the question.
@@ -70,6 +76,7 @@ DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the databa
 """.format(
     dialect=db.dialect,
     top_k=5,
+    current_date=current_date,
 )
 
 def generate_query(state: MessagesState):
