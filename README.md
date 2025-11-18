@@ -1,6 +1,15 @@
 # Stock Database Query Agent
 
-This application provides a Streamlit interface to query a stock database using a Langchain agent.
+This application provides a FastAPI interface to query a stock database using a Langchain agent.
+
+## Project Structure
+
+- `app.py`: The main FastAPI application that exposes the `/query` endpoint.
+- `create_db.py`: A script to create the `conversation_history` table in the `stock.db` database.
+- `insert_data.py`: A script to insert stock data from CSV files into the `stock.db` database.
+- `test_app.py`: A suite of unit tests for the FastAPI application.
+- `stock.db`: The SQLite database containing the stock data and conversation history.
+- `db.ipynb`: A Jupyter notebook for exploring the database.
 
 ## Setup Instructions
 
@@ -18,18 +27,18 @@ cd stock_agent_own
 It's recommended to use a virtual environment to manage dependencies.
 
 ```bash
-python -m venv venv
+python -m venv .venv
 ```
 
 ### 3. Activate the Virtual Environment
 
 - **On macOS/Linux:**
   ```bash
-  source venv/bin/activate
+  source .venv/bin/activate
   ```
 - **On Windows:**
   ```bash
-  .\venv\Scripts\activate
+  .\.venv\Scripts\activate
   ```
 
 ### 4. Install Dependencies
@@ -52,22 +61,48 @@ Replace `"your_google_api_key_here"` with your actual Google API Key.
 
 ### 6. Prepare the Database
 
-Ensure you have a `stock.db` SQLite database in the root directory. If you need to convert dates in your `stock_index_price` table, you can run the `convert_dates.py` script:
+First, create the necessary tables in the database by running the `create_db.py` script:
 
 ```bash
-python convert_dates.py
+python create_db.py
 ```
 
-### 7. Run the Streamlit Application
-
-Once all dependencies are installed and the API key is set, you can run the Streamlit application:
+Then, insert the stock data from the CSV files in the `Market Data` directory by running the `insert_data.py` script:
 
 ```bash
-streamlit run app.py
+python insert_data.py
 ```
 
-This will open the application in your web browser.
+### 7. Run the FastAPI Application
 
-## UI Screenshot
+Once all dependencies are installed and the API key is set, you can run the FastAPI application:
 
-![UI Screenshot](img/UI.jpg)
+```bash
+python app.py
+```
+
+This will start the server on `http://0.0.0.0:8000`.
+
+### 8. Run the Unit Tests
+
+To run the unit tests, use the following command:
+
+```bash
+pytest
+```
+
+## API Usage
+
+You can send queries to the `/query` endpoint using a tool like `curl`.
+
+### Example Query
+
+```bash
+curl -X 'POST' \
+  'http://0.0.0.0:8000/query' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "query": "what is the last 6 closing price of Nifty Bank",
+  "session_id": "your_session_id"
+}'

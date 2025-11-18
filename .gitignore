@@ -4,6 +4,9 @@ stocks.sqbpro
 .DS_Store
 test.py
 .env
+app_api_v0.py
+app_streamlit.py
+log.html
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

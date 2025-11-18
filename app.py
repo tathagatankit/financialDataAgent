@@ -1,14 +1,17 @@
 import os
-import streamlit as st
+from fastapi import FastAPI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
+import uuid
+import sqlite3
+import json
 from typing import Literal
 from langgraph.prebuilt import ToolNode
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage, message_to_dict, messages_from_dict
 from langgraph.graph import END, START, MessagesState, StateGraph
 from dotenv import load_dotenv
-from datetime import datetime
+from pydantic import BaseModel
 
 # Load environment variables
 load_dotenv()
@@ -19,9 +22,6 @@ os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
 # Initialize LLM
 model = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
 llm = model
-
-# Get current date for context
-current_date = datetime.now().strftime("%Y-%m-%d")
 
 # Initialize SQLDatabase
 db = SQLDatabase.from_uri("sqlite:///stock.db")
@@ -62,11 +62,14 @@ def call_get_schema(state: MessagesState):
 generate_query_system_prompt = """
 You are an agent designed to interact with a SQL database.
 Given an input question, create a syntactically correct {dialect} query to run,
-then look at the results of the query and return the answer. Unless the user
-specifies a specific number of examples they wish to obtain, always limit your
-query to at most {top_k} results.
+then look at the results of the query and return the answer.
 
-The current date is {current_date}. Use this information when queries refer to "today", "latest", or relative timeframes.
+Use the conversation history to answer follow-up questions. For example, if the user asks for the average of the last 6 closing prices, and the previous turn contains the last 6 closing prices, you should calculate the average from those prices.
+
+The database is about stocks and contains tables such as 'stock_index_price_daily'.
+The tables contain historical stock index prices with columns like 'date_key', 'open', 'high', 'low', 'close', and 'index_name'.
+
+When querying for an index name, use the UPPER function to ensure case-insensitive matching. For example, to find 'nifty auto', use `WHERE UPPER(index_name) = 'NIFTY AUTO'`.
 
 You can order the results by a relevant column to return the most interesting
 examples in the database. Never query for all the columns from a specific table,
@@ -76,7 +79,6 @@ DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the databa
 """.format(
     dialect=db.dialect,
     top_k=5,
-    current_date=current_date,
 )
 
 def generate_query(state: MessagesState):
@@ -148,58 +150,78 @@ builder.add_edge("run_query", "generate_query")
 
 agent = builder.compile()
 
-# Streamlit UI
-st.title("Stock Database Query Agent")
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+from datetime import datetime
 
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+def get_history(session_id: str) -> list:
+    """Fetches conversation history from the database."""
+    conn = sqlite3.connect("stock.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT messages FROM conversation_history WHERE session_id = ?", (session_id,))
+    result = cursor.fetchone()
+    conn.close()
+    if result:
+        return messages_from_dict(json.loads(result[0]))
+    return []
 
-if prompt := st.chat_input("What would you like to know about the stocks?"):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+def save_history(session_id: str, messages: list):
+    """Saves conversation history to the database."""
+    conn = sqlite3.connect("stock.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR REPLACE INTO conversation_history (session_id, messages, timestamp) VALUES (?, ?, ?)",
+        (session_id, json.dumps([message_to_dict(m) for m in messages]), datetime.now()),
+    )
+    conn.commit()
+    conn.close()
 
-    with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        full_response = ""
-        
-        # Prepare messages for the agent, including only user messages for the initial prompt
-        agent_messages = [{"role": "user", "content": prompt}]
 
-        all_streamed_messages = []
-        for step in agent.stream(
-            {"messages": agent_messages},
-            stream_mode="values",
-        ):
-            all_streamed_messages.extend(step["messages"])
-            
-            # For real-time display, we can show the latest content from an AIMessage
-            # that doesn't have tool calls, or just the raw message if it's not an AIMessage
-            current_display_content = ""
-            for msg in reversed(step["messages"]):
-                if isinstance(msg, AIMessage) and msg.content and not msg.tool_calls:
-                    current_display_content = msg.content
-                    break
-                elif isinstance(msg, AIMessage) and msg.tool_calls:
-                    # If the last message is a tool call, we might want to indicate that work is in progress
-                    current_display_content = "Thinking..."
-                    break
-                elif msg.content:
-                    current_display_content = msg.content
-                    break
-            message_placeholder.markdown(current_display_content + "▌")
+# FastAPI application
+app = FastAPI()
 
-        # After the stream finishes, find the final human-readable answer
-        final_answer = "No response."
-        for message in reversed(all_streamed_messages):
-            if isinstance(message, AIMessage) and message.content and not message.tool_calls:
-                final_answer = message.content
-                break
-        
-        message_placeholder.markdown(final_answer)
-        full_response = final_answer
-    st.session_state.messages.append({"role": "assistant", "content": full_response})
+
+class QueryRequest(BaseModel):
+    query: str
+    session_id: str | None = None
+
+
+@app.post("/query")
+async def run_agent_query(request: QueryRequest):
+    session_id = request.session_id or str(uuid.uuid4())
+
+    # Retrieve conversation history or start a new one
+    history = get_history(session_id)
+
+    # Add the new user message
+    messages = history + [HumanMessage(content=request.query)]
+
+    # Invoke the agent with the conversation history
+    final_state = None
+    for s in agent.stream({"messages": messages}):
+        final_state = s
+
+    if not final_state:
+        return {"response": "Agent failed to produce a response.", "session_id": session_id}
+
+    # The final state is a dictionary where the last value is the most recent state
+    final_messages = list(final_state.values())[-1]["messages"]
+
+    # Update the history for the session
+    save_history(session_id, final_messages)
+
+    # Find the last AIMessage to send back to the user
+    final_answer = "No response."
+    for message in reversed(final_messages):
+        if isinstance(message, AIMessage) and message.content and not message.tool_calls:
+            final_answer = message.content
+            break
+
+    return {"response": final_answer, "session_id": session_id}
+
+@app.get("/")
+async def root():
+    return {"message": "Stock Database Query Agent API. Use /query endpoint to send queries."}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
