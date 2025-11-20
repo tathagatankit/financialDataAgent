@@ -7,6 +7,8 @@ test.py
 app_api_v0.py
 app_streamlit.py
 log.html
+app_sql_agent.py
+multi_agent_app.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -9,9 +9,12 @@ import json
 from typing import Literal
 from langgraph.prebuilt import ToolNode
 from langchain_core.messages import AIMessage, HumanMessage, message_to_dict, messages_from_dict
-from langgraph.graph import END, START, MessagesState, StateGraph
+from langgraph.graph import END, START, StateGraph
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from langchain_core.messages import BaseMessage
+from typing import Annotated, List
+from typing_extensions import TypedDict
 
 # Load environment variables
 load_dotenv()
@@ -20,8 +23,8 @@ load_dotenv()
 os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
 
 # Initialize LLM
-model = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
-llm = model
+model = "gemini-2.5-pro"
+llm = ChatGoogleGenerativeAI(model=model)
 
 # Initialize SQLDatabase
 db = SQLDatabase.from_uri("sqlite:///stock.db")
@@ -30,34 +33,19 @@ db = SQLDatabase.from_uri("sqlite:///stock.db")
 toolkit = SQLDatabaseToolkit(db=db, llm=llm)
 tools = toolkit.get_tools()
 
-# Define nodes for the graph
-get_schema_tool = next(tool for tool in tools if tool.name == "sql_db_schema")
-get_schema_node = ToolNode([get_schema_tool], name="get_schema")
+# Agent State
+class AgentState(TypedDict):
+    messages: Annotated[List[BaseMessage], lambda x, y: x + y]
 
 run_query_tool = next(tool for tool in tools if tool.name == "sql_db_query")
-run_query_node = ToolNode([run_query_tool], name="run_query")
 
-# Example: create a predetermined tool call
-def list_tables(state: MessagesState):
-    tool_call = {
-        "name": "sql_db_list_tables",
-        "args": {},
-        "id": "abc123",
-        "type": "tool_call",
-    }
-    tool_call_message = AIMessage(content="", tool_calls=[tool_call])
-
-    list_tables_tool = next(tool for tool in tools if tool.name == "sql_db_list_tables")
-    tool_message = list_tables_tool.invoke(tool_call)
-    response = AIMessage(f"Available tables: {tool_message.content}")
-
-    return {"messages": [tool_call_message, tool_message, response]}
-
-# Example: force a model to create a tool call
-def call_get_schema(state: MessagesState):
-    llm_with_tools = llm.bind_tools([get_schema_tool], tool_choice="any")
-    response = llm_with_tools.invoke(state["messages"])
-    return {"messages": [response]}
+stdev_instruction = ""
+if db.dialect == "sqlite":
+    stdev_instruction = """
+To calculate the standard deviation for a column `x`, you can use the formula `SQRT(AVG(x*x) - AVG(x)*AVG(x))`.
+This is because the connected database is SQLite, which does not have a built-in standard deviation function.
+For example, to calculate the standard deviation of returns, you would first need to calculate the daily returns (e.g., `(close - open) / open`) and then apply the formula.
+"""
 
 generate_query_system_prompt = """
 You are an agent designed to interact with a SQL database.
@@ -76,12 +64,15 @@ examples in the database. Never query for all the columns from a specific table,
 only ask for the relevant columns given the question.
 
 DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
+
+{stdev_instruction}
 """.format(
     dialect=db.dialect,
     top_k=5,
+    stdev_instruction=stdev_instruction
 )
 
-def generate_query(state: MessagesState):
+def generate_query(state: AgentState):
     system_message = {
         "role": "system",
         "content": generate_query_system_prompt,
@@ -108,7 +99,7 @@ just reproduce the original query.
 You will call the appropriate tool to execute the query after running this check.
 """.format(dialect=db.dialect)
 
-def check_query(state: MessagesState):
+def check_query(state: AgentState):
     system_message = {
         "role": "system",
         "content": check_query_system_prompt,
@@ -120,36 +111,119 @@ def check_query(state: MessagesState):
     response.id = state["messages"][-1].id
     return {"messages": [response]}
 
-def should_continue(state: MessagesState) -> Literal[END, "check_query"]:
+# SQL Generation Agent
+def sql_generator_agent(state: AgentState):
+    """
+    Generates a SQL query based on the user's question.
+    """
+    return generate_query(state)
+
+# Query Validation Agent
+def query_validation_agent(state: AgentState):
+    """
+    Validates the SQL query for correctness and security.
+    """
+    return check_query(state)
+
+data_analyst_system_prompt = """
+You are a data analyst agent. Your task is to analyze the results of a SQL query
+and provide a concise, insightful summary. The user's original question will be
+provided for context. Do not just repeat the data; interpret it and highlight
+the key findings.
+"""
+
+# Data Analyst Agent
+def data_analyst_agent(state: AgentState):
+    """
+    Analyzes the data and provides insights.
+    """
+    user_query = ""
+    for m in state["messages"]:
+        if isinstance(m, HumanMessage):
+            user_query = m.content
+            break
+    
+    sql_result = state["messages"][-1].content
+
+    prompt = f"Original question: {user_query}\n\nSQL query result:\n{sql_result}"
+    
+    system_message = {
+        "role": "system",
+        "content": data_analyst_system_prompt,
+    }
+    
+    response = llm.invoke([system_message, HumanMessage(content=prompt)])
+    return {"messages": [response]}
+
+response_generator_system_prompt = """
+You are a response generation agent. Your task is to take the analysis from the
+data analyst and formulate a clear, user-friendly final answer. Ensure the
+response is easy to understand and directly answers the user's original question.
+"""
+
+# Response Generation Agent
+def response_generator_agent(state: AgentState):
+    """
+    Generates a final, human-readable response.
+    """
+    user_query = ""
+    for m in state["messages"]:
+        if isinstance(m, HumanMessage):
+            user_query = m.content
+            break
+            
+    analyst_summary = state["messages"][-1].content
+
+    prompt = f"Original question: {user_query}\n\nAnalysis summary:\n{analyst_summary}"
+
+    system_message = {
+        "role": "system",
+        "content": response_generator_system_prompt,
+    }
+
+    response = llm.invoke([system_message, HumanMessage(content=prompt)])
+    return {"messages": [response]}
+
+def should_validate_query(state: AgentState) -> Literal["query_validator", "response_generator"]:
+    """
+    Determines whether to validate the query or generate a response.
+    """
     messages = state["messages"]
     last_message = messages[-1]
     if not last_message.tool_calls:
-        return END
+        # If there are no tool calls, the LLM might have responded directly.
+        return "response_generator"
     else:
-        return "check_query"
+        # If there are tool calls, proceed to validation.
+        return "query_validator"
 
-# Build the graph
-builder = StateGraph(MessagesState)
-builder.add_node(list_tables)
-builder.add_node(call_get_schema)
-builder.add_node(get_schema_node, "get_schema")
-builder.add_node(generate_query)
-builder.add_node(check_query)
-builder.add_node(run_query_node, "run_query")
+# Define the graph
+builder = StateGraph(AgentState)
 
-builder.add_edge(START, "list_tables")
-builder.add_edge("list_tables", "call_get_schema")
-builder.add_edge("call_get_schema", "get_schema")
-builder.add_edge("get_schema", "generate_query")
+# Add nodes
+builder.add_node("sql_generator", sql_generator_agent)
+builder.add_node("query_validator", query_validation_agent)
+builder.add_node("data_analyst", data_analyst_agent)
+builder.add_node("response_generator", response_generator_agent)
+run_query_node = ToolNode([run_query_tool], name="run_query")
+builder.add_node("run_query", run_query_node)
+
+# Define edges
+builder.add_edge(START, "sql_generator")
 builder.add_conditional_edges(
-    "generate_query",
-    should_continue,
+    "sql_generator",
+    should_validate_query,
+    {
+        "query_validator": "query_validator",
+        "response_generator": "response_generator",
+    },
 )
-builder.add_edge("check_query", "run_query")
-builder.add_edge("run_query", "generate_query")
+builder.add_edge("query_validator", "run_query")
+builder.add_edge("run_query", "data_analyst")
+builder.add_edge("data_analyst", "response_generator")
+builder.add_edge("response_generator", END)
 
 agent = builder.compile()
-
 
 from datetime import datetime
 
@@ -175,15 +249,12 @@ def save_history(session_id: str, messages: list):
     conn.commit()
     conn.close()
 
-
 # FastAPI application
 app = FastAPI()
-
 
 class QueryRequest(BaseModel):
     query: str
     session_id: str | None = None
-
 
 @app.post("/query")
 async def run_agent_query(request: QueryRequest):
