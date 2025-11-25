@@ -5,3 +5,6 @@ python-dotenv
 fastapi
 uvicorn
 protobuf==4.23.4
+aiosqlite
+jinja2
+httpx

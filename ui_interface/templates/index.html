@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Agent UI</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="/static/app.js" defer></script>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <img src="https://placehold.co/120x40" alt="Company Logo">
+            </div>
+            <div class="header-actions">
+                <button id="toggle-progress-btn">Show Progress</button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Left Panel: Query Examples -->
+            <div class="examples-panel">
+                <div class="query-examples-section">
+                    <h3>💡 What I Can Help With</h3>
+                    <div class="examples-container">
+                        <div class="example-category">
+                            <h4 class="can-answer">✅ Answerable Queries</h4>
+                            <ul class="query-examples">
+                                <li>What has been the performance of IT sector stocks over the last 6 months?</li>
+                                <li>Which sector shows the highest volatility in the past year?</li>
+                                <li>Analyze the price trend of Auto sector vs Metal sector</li>
+                                <li>What are the trading volumes trends for Financial Services stocks?</li>
+                                <!-- <li>Show me the best performing stocks in IT sector based on price appreciation</li> -->
+                            </ul>
+                        </div>
+                        
+                        <div class="example-category">
+                            <h4 class="cant-answer">❌ Unanswerable Queries</h4>
+                            <ul class="query-examples">
+                                <li>What is the P/E ratio of [Company]?</li>
+                                <li>Is [Company] undervalued based on fundamentals?</li>
+                                <li>What are the quarterly earnings projections?</li>
+                                <!-- <li>Show me the dividend yield for [Stock]</li> -->
+                                <!-- <li>What is the Beta of [Stock] compared to NIFTY?</li>
+                                <li>Provide analyst recommendations for [Sector]</li> -->
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Right Panel: Chat Window -->
+            <div class="chat-panel">
+                <div class="chat-window">
+                    <div id="chat-box" class="chat-box">
+                        <!-- Chat messages will be appended here -->
+                    </div>
+                </div>
+                
+                <form id="query-form" class="query-form">
+                    <input type="hidden" name="session_id" id="session_id">
+                    <input type="text" name="query" placeholder="Ask about stocks..." required>
+                    <button type="submit">Send</button>
+                </form>
+            </div>
+        </div>
+        
+        <!-- Right Panel: Progress Panel (Sliding) -->
+        <div id="progress-panel" class="progress-panel" style="display: none;">
+            <div class="progress-header">
+                <h3>🔍 Financial Analysis in Progress</h3>
+                <div id="estimated-time" class="estimated-time">~20 seconds remaining</div>
+            </div>
+            
+            <div class="progress-stages">
+                <div class="stage" data-stage="planning">
+                    <div class="stage-icon">📋</div>
+                    <div class="stage-content">
+                        <div class="stage-title">Planning Analysis</div>
+                        <div class="stage-description">Understanding your financial query...</div>
+                    </div>
+                    <div class="stage-status" id="status-planning">⏳</div>
+                </div>
+                
+                <div class="stage" data-stage="sql">
+                    <div class="stage-icon">🗄️</div>
+                    <div class="stage-content">
+                        <div class="stage-title">Generating SQL Queries</div>
+                        <div class="stage-description">Creating optimized database queries...</div>
+                    </div>
+                    <div class="stage-status" id="status-sql">⏳</div>
+                </div>
+                
+                <div class="stage" data-stage="query">
+                    <div class="stage-icon">🔍</div>
+                    <div class="stage-content">
+                        <div class="stage-title">Executing Query</div>
+                        <div class="stage-description">Querying stock database...</div>
+                    </div>
+                    <div class="stage-status" id="status-query">⏳</div>
+                </div>
+                
+                <div class="stage" data-stage="analysis">
+                    <div class="stage-icon">📊</div>
+                    <div class="stage-content">
+                        <div class="stage-title">Analyzing Results</div>
+                        <div class="stage-description">Processing financial data...</div>
+                    </div>
+                    <div class="stage-status" id="status-analysis">⏳</div>
+                </div>
+                
+                <div class="stage" data-stage="final">
+                    <div class="stage-icon">💡</div>
+                    <div class="stage-content">
+                        <div class="stage-title">Generating Report</div>
+                        <div class="stage-description">Creating investment recommendations...</div>
+                    </div>
+                    <div class="stage-status" id="status-final">⏳</div>
+                </div>
+            </div>
+            
+            <div class="progress-stats">
+                <div class="stat-item">
+                    <span class="stat-label">Processing Stage:</span>
+                    <span id="current-stage" class="stat-value">Planning...</span>
+                </div>
+            </div>
+            
+            <div class="progress-actions">
+                <button id="close-btn" class="close-btn">Close</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
